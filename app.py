@@ -13,6 +13,19 @@ import uuid
 import sys
 from datetime import datetime
 
+# ----------------- TRACKER DEBBUGGING FALLBACK SYSTEM -----------------
+# Dynamically register lapx as lap in sys.modules to prevent the classic
+# "No module named 'lap'" error in YOLOv8's internal Hungarian matcher.
+try:
+    import lap
+except ImportError:
+    try:
+        import lapx as lap
+        sys.modules['lap'] = lap  # Inject lapx into standard lap namespace
+        print("[DEBUG] Successfully injected lapx as lap wrapper in app.py.", file=sys.stderr)
+    except ImportError:
+        print("[WARNING] Neither 'lap' nor 'lapx' is installed. YOLO tracking might fail.", file=sys.stderr)
+
 # Set page configuration FIRST before any other streamlit call
 st.set_page_config(
     page_title="AI Traffic Monitor & Vehicle Counting Suite",
@@ -512,14 +525,23 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                             })
                             color_line2 = (0, 255, 0)
                             
-                # Dynamic visual rendering overlays
+            # Boundaries overlays & visual trail
+            for track_id, pts in track_history.items():
+                if track_id in active_vehicles or track_id in counted_ids:
+                    # Determine label and box for active
+                    # Overlay visual tracks
+                    for i in range(1, len(pts)):
+                        cv2.line(frame_resized, pts[i-1], pts[i], (255, 255, 0), 2)
+                        
+            # Dynamic visual rendering overlays for current detections
+            for det in detections:
+                box = det["box"]
+                label = det["label"]
+                conf = det["conf"]
+                track_id = det["track_id"]
                 if track_id in active_vehicles or track_id in counted_ids:
                     bbox_color = (0, 255, 0) if track_id in active_vehicles else None
                     draw_bbox(frame_resized, box, label, conf, track_id=track_id, color=bbox_color)
-                    
-                    pts = track_history[track_id]
-                    for i in range(1, len(pts)):
-                        cv2.line(frame_resized, pts[i-1], pts[i], (255, 255, 0), 2)
                         
             # Boundaries overlays
             cv2.line(frame_resized, line1_pt1, line1_pt2, color_line1, 3)
@@ -604,9 +626,6 @@ if st.session_state.process_complete and len(st.session_state.final_counts) > 0:
             st.warning("⚠️ No vehicles crossed both lines during this video stream.")
             
     # TAB 2: Visual Charts
-    with tab_logs:
-        pass
-        
     with tab_charts:
         st.markdown("#### Visual Flow Distribution Summary")
         if total_audited > 0:

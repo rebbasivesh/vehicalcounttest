@@ -4,3 +4,6 @@ opencv-python-headless>=4.8.0
 pandas>=2.0.0
 plotly>=5.15.0
 numpy>=1.20.0
+scipy>=1.10.0
+filterpy>=1.4.5
+lapx>=0.5.5

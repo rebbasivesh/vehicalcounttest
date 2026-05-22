@@ -1,3 +1,18 @@
+import sys
+
+# ----------------- TRACKER DEBBUGGING FALLBACK SYSTEM -----------------
+# Dynamically register lapx as lap in sys.modules to prevent the classic
+# "No module named 'lap'" error in YOLOv8's internal Hungarian matcher.
+try:
+    import lap
+except ImportError:
+    try:
+        import lapx as lap
+        sys.modules['lap'] = lap  # Inject lapx into standard lap namespace
+        print("[DEBUG] Successfully injected lapx as lap wrapper.", file=sys.stderr)
+    except ImportError:
+        print("[WARNING] Neither 'lap' nor 'lapx' is installed. YOLO tracking might fail.", file=sys.stderr)
+
 from ultralytics import YOLO
 
 class VehicleDetector:
