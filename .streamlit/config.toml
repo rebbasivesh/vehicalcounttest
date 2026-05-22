@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#00FF66"          # Neon Green accent color for progress bars, buttons, and selections
+backgroundColor = "#0E1117"       # Sleek deep dark gray background
+secondaryBackgroundColor = "#1F2635"# Modern dark card/sidebar background
+textColor = "#FFFFFF"             # High-contrast white text
+font = "sans serif"               # Premium clean fonts
