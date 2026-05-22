@@ -199,6 +199,8 @@ if "processed_video_path" not in st.session_state:
     st.session_state.processed_video_path = None
 if "temp_raw_video_path" not in st.session_state:
     st.session_state.temp_raw_video_path = None
+if "process_error" not in st.session_state:
+    st.session_state.process_error = None
 
 def cleanup_temp_files():
     """
@@ -218,6 +220,7 @@ def cleanup_temp_files():
             pass
     st.session_state.processed_video_path = None
     st.session_state.temp_raw_video_path = None
+    st.session_state.process_error = None
 
 def toggle_processing():
     """
@@ -227,6 +230,7 @@ def toggle_processing():
         st.session_state.is_processing = True
         st.session_state.stop_requested = False
         st.session_state.process_complete = False
+        st.session_state.process_error = None
         st.session_state.report_data = []
         st.session_state.final_counts = {}
     else:
@@ -240,6 +244,24 @@ st.markdown("""
     <p>A production-ready YOLOv8 computer vision dashboard for traffic analytics, flow optimization, and detailed audit reports.</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Display any pipeline processing error prominently
+if st.session_state.get("process_error"):
+    st.error("❌ **Background Vehicle Processing Pipeline Failure**")
+    st.markdown("""
+    The offline video processing engine encountered an exception and was halted to prevent a silent process crash. 
+    Review the diagnostic traceback logs below to identify the issue:
+    """)
+    st.code(st.session_state.process_error, language="python")
+    
+    # Render a retry/reset button directly below the error display
+    if st.button("🔄 Clear Error & Reset Dashboard State"):
+        st.session_state.process_error = None
+        st.session_state.is_processing = False
+        st.session_state.process_complete = False
+        st.rerun()
+        
+    st.markdown("---")
 
 # ----------------- SIDEBAR CONTROLS (WIDGET DISABLING MECHANISM) -----------------
 # All control sliders are dynamically disabled when processing is active
@@ -400,55 +422,88 @@ elif st.session_state.is_processing:
 
 # ----------------- MAIN VIDEO PROCESSING LOOP (OFFLINE) -----------------
 if st.session_state.is_processing and st.session_state.temp_raw_video_path:
-    # 1. Cache load detector safely
-    try:
-        detector = get_cached_detector(selected_model)
-    except Exception as e:
-        st.error(f"❌ Failed to load YOLO model: {e}")
-        st.session_state.is_processing = False
-        st.stop()
-        
-    # 2. Establish unique output paths to prevent lock collisions
-    unique_id = uuid.uuid4().hex[:8]
-    temp_out_path = os.path.join(tempfile.gettempdir(), f"processed_{unique_id}.mp4")
+    import traceback
     
-    cap = cv2.VideoCapture(st.session_state.temp_raw_video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps_video = cap.get(cv2.CAP_PROP_FPS)
-    if fps_video <= 0:
-        fps_video = 30.0
-        
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    # Physically resize target video frames to 640x360 for high efficiency
-    out = cv2.VideoWriter(temp_out_path, fourcc, fps_video / frame_skipping, (640, 360))
+    # Reset error state before processing starts
+    st.session_state.process_error = None
     
-    # 3. Running loop states
-    track_history = {}
-    track_last_seen = {} # track_id -> frame_idx to purge old inactive vehicles
-    active_vehicles = {} # track_id -> entry_time
-    counted_ids = set()
-    local_logs = []
-    
-    local_counts = {
-        "Car": 0,
-        "Bike": 0,
-        "Bus": 0,
-        "Truck": 0,
-        "Auto": 0,
-        "Others": 0
-    }
-    
-    # Line endpoints scaled to 640x360
-    line1_pt1, line1_pt2 = (0, entry_line_y), (640, entry_line_y)
-    line2_pt1, line2_pt2 = (0, exit_line_y), (640, exit_line_y)
-    
-    frame_idx = 0
-    start_time = time.time()
-    prev_time = start_time
-    
-    print(f"[DEBUG] Started offline detection. Resizing to 640x360, imgsz={imgsz_selection}. Output: {temp_out_path}", file=sys.stderr)
+    cap = None
+    out = None
+    temp_out_path = None
     
     try:
+        # 1. Cache load detector safely
+        try:
+            detector = get_cached_detector(selected_model)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load YOLO model `{selected_model}`: {e}\n{traceback.format_exc()}")
+            
+        # 2. Establish unique output paths to prevent lock collisions
+        unique_id = uuid.uuid4().hex[:8]
+        temp_out_path = os.path.join(tempfile.gettempdir(), f"processed_{unique_id}.mp4")
+        
+        cap = cv2.VideoCapture(st.session_state.temp_raw_video_path)
+        if not cap.isOpened():
+            raise IOError(f"Failed to open source video file: {st.session_state.temp_raw_video_path}")
+            
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps_video = cap.get(cv2.CAP_PROP_FPS)
+        if fps_video <= 0:
+            fps_video = 30.0
+            
+        # Try to open output video using multiple codecs for web player compatibility
+        codecs_to_try = ['avc1', 'mp4v', 'XVID']
+        out = None
+        for codec in codecs_to_try:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                out = cv2.VideoWriter(temp_out_path, fourcc, fps_video / frame_skipping, (640, 360))
+                if out.isOpened():
+                    print(f"[DEBUG] VideoWriter successfully opened with codec '{codec}'", file=sys.stderr)
+                    break
+            except Exception as e:
+                print(f"[WARNING] Failed to open VideoWriter with codec '{codec}': {e}", file=sys.stderr)
+                if out is not None:
+                    out.release()
+                out = None
+                
+        if out is None or not out.isOpened():
+            # Last resort fallback to MJPG
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                out = cv2.VideoWriter(temp_out_path, fourcc, fps_video / frame_skipping, (640, 360))
+            except Exception as e:
+                raise IOError(f"Failed to initialize video writer: {e}")
+                
+        if out is None or not out.isOpened():
+            raise IOError("Failed to initialize video writer with any supported codec.")
+        
+        # 3. Running loop states
+        track_history = {}
+        track_last_seen = {} # track_id -> frame_idx to purge old inactive vehicles
+        active_vehicles = {} # track_id -> entry_time
+        counted_ids = set()
+        local_logs = []
+        
+        local_counts = {
+            "Car": 0,
+            "Bike": 0,
+            "Bus": 0,
+            "Truck": 0,
+            "Auto": 0,
+            "Others": 0
+        }
+        
+        # Line endpoints scaled to 640x360
+        line1_pt1, line1_pt2 = (0, entry_line_y), (640, entry_line_y)
+        line2_pt1, line2_pt2 = (0, exit_line_y), (640, exit_line_y)
+        
+        frame_idx = 0
+        start_time = time.time()
+        prev_time = start_time
+        
+        print(f"[DEBUG] Started offline detection. Resizing to 640x360, imgsz={imgsz_selection}. Output: {temp_out_path}", file=sys.stderr)
+        
         while cap.isOpened():
             # Check if user requested stop via sidebar callback
             if st.session_state.stop_requested:
@@ -469,7 +524,15 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
             frame_resized = cv2.resize(frame, (640, 360))
             
             # Run YOLO track with user thresholds and optimized imgsz
-            detections = detector.detect_and_track(frame_resized, conf=conf_threshold, iou=iou_threshold, imgsz=imgsz_selection)
+            # Gracefully handle signature mismatches of cached models
+            try:
+                detections = detector.detect_and_track(frame_resized, conf=conf_threshold, iou=iou_threshold, imgsz=imgsz_selection)
+            except TypeError as te:
+                if "unexpected keyword argument 'imgsz'" in str(te):
+                    print("[WARNING] Cached VehicleDetector lacks imgsz. Falling back to default imgsz.", file=sys.stderr)
+                    detections = detector.detect_and_track(frame_resized, conf=conf_threshold, iou=iou_threshold)
+                else:
+                    raise te
             
             color_line1 = (0, 255, 255) # Yellow
             color_line2 = (255, 0, 255) # Magenta
@@ -581,7 +644,8 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
             draw_dashboard(frame_resized, local_counts, len(counted_ids), len(active_vehicles))
             
             # Write annotated frame to video file
-            out.write(frame_resized)
+            if out is not None:
+                out.write(frame_resized)
             
             # Sparse updates to Streamlit socket interface (drastically boosts processing speed)
             if frame_idx % 15 == 0 or frame_idx == total_frames:
@@ -592,23 +656,36 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                 status_text.markdown(f"**Progress**: {int(pct*100)}%")
                 timer_text.markdown(f"⏱️ **Elapsed**: {elapsed:.1f}s | ⚡ **Average Speed**: {avg_fps:.1f} FPS | **Frame**: {frame_idx}/{total_frames}")
                 
+        # Save variables to stable session states upon successful completion
+        if not st.session_state.stop_requested:
+            st.session_state.process_complete = True
+            st.session_state.report_data = local_logs
+            st.session_state.final_counts = local_counts
+            st.session_state.processed_video_path = temp_out_path
+            st.session_state.process_error = None
+            print(f"[DEBUG] Finished loop successfully. Releasing resources. Process complete.", file=sys.stderr)
+            
     except Exception as run_err:
-        print(f"[ERROR] Exception during tracking execution: {run_err}", file=sys.stderr)
-        st.error(f"⚠️ Silent crash prevented! Error: {run_err}")
+        err_msg = traceback.format_exc()
+        print(f"[ERROR] Exception during tracking execution:\n{err_msg}", file=sys.stderr)
+        st.session_state.process_error = err_msg
+        st.session_state.process_complete = False
         
+        # Clean up corrupted output video file
+        if temp_out_path and os.path.exists(temp_out_path):
+            try:
+                os.remove(temp_out_path)
+            except:
+                pass
+                
     finally:
         # Guarantee resources are fully closed and released!
-        cap.release()
-        out.release()
-        
-        # Save variables to stable session states
+        if cap is not None:
+            cap.release()
+        if out is not None:
+            out.release()
+            
         st.session_state.is_processing = False
-        st.session_state.process_complete = True
-        st.session_state.report_data = local_logs
-        st.session_state.final_counts = local_counts
-        st.session_state.processed_video_path = temp_out_path
-        
-        print(f"[DEBUG] Finished loop. Releasing resources. Process complete.", file=sys.stderr)
         st.rerun()
 
 # ----------------- BOTTOM SECTION: TABS FOR RESULTS & DOWNLOADS -----------------
