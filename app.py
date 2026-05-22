@@ -417,6 +417,7 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
     
     # 3. Running loop states
     track_history = {}
+    track_last_seen = {} # track_id -> frame_idx to purge old inactive vehicles
     active_vehicles = {} # track_id -> entry_time
     counted_ids = set()
     local_logs = []
@@ -482,6 +483,7 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                 if track_id not in track_history:
                     track_history[track_id] = []
                 track_history[track_id].append((cx, cy))
+                track_last_seen[track_id] = frame_idx
                 
                 if len(track_history[track_id]) > 30:
                     track_history[track_id].pop(0)
@@ -501,6 +503,10 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                         if check_intersection(prev_pt, curr_pt, line2_pt1, line2_pt2):
                             entry_time = active_vehicles.pop(track_id)
                             counted_ids.add(track_id)
+                            
+                            # Immediately remove tracking history and trails upon crossing exit line
+                            track_history.pop(track_id, None)
+                            track_last_seen.pop(track_id, None)
                             
                             # Increment category count
                             if label in local_counts:
@@ -525,13 +531,22 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                             })
                             color_line2 = (0, 255, 0)
                             
+            # Purge inactive vehicle IDs from memory to prevent memory buildup
+            # If not detected for 30 consecutive frames, safely remove
+            inactive_threshold = 30
+            for tid in list(track_history.keys()):
+                if frame_idx - track_last_seen.get(tid, 0) > inactive_threshold:
+                    track_history.pop(tid, None)
+                    active_vehicles.pop(tid, None)
+                    track_last_seen.pop(tid, None)
+                            
             # Boundaries overlays & visual trail
             for track_id, pts in track_history.items():
-                if track_id in active_vehicles or track_id in counted_ids:
-                    # Determine label and box for active
-                    # Overlay visual tracks
+                # Only draw trails for vehicles that haven't crossed the exit line yet
+                if track_id not in counted_ids:
+                    # Draw premium blue tracking trail (BGR format)
                     for i in range(1, len(pts)):
-                        cv2.line(frame_resized, pts[i-1], pts[i], (255, 255, 0), 2)
+                        cv2.line(frame_resized, pts[i-1], pts[i], (255, 0, 0), 2)
                         
             # Dynamic visual rendering overlays for current detections
             for det in detections:
@@ -539,7 +554,8 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                 label = det["label"]
                 conf = det["conf"]
                 track_id = det["track_id"]
-                if track_id in active_vehicles or track_id in counted_ids:
+                # Only render bounding box for vehicles that haven't crossed the exit line yet
+                if track_id not in counted_ids:
                     bbox_color = (0, 255, 0) if track_id in active_vehicles else None
                     draw_bbox(frame_resized, box, label, conf, track_id=track_id, color=bbox_color)
                         

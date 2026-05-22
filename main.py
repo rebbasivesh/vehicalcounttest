@@ -103,9 +103,11 @@ def main():
     detector = VehicleDetector(model_path="yolov8m.pt")
     
     track_history = {}
+    track_last_seen = {} # track_id -> frame_idx to purge old inactive vehicles
     active_vehicles = {} # track_id -> entry_timestamp (str)
     counted_ids = set()
     vehicle_logs = [] # List of dicts for CSV: {ID, Class, Entry Time, Exit Time, Duration}
+    frame_idx = 0
     
     counts = {
         "2 Wheeler": 0,
@@ -123,6 +125,7 @@ def main():
             print("\nEnd of video reached.")
             break
             
+        frame_idx += 1
         frame = cv2.resize(frame, (1020, 600))
         
         detections = detector.detect_and_track(frame)
@@ -145,6 +148,7 @@ def main():
             if track_id not in track_history:
                 track_history[track_id] = []
             track_history[track_id].append((cx, cy))
+            track_last_seen[track_id] = frame_idx
             
             if len(track_history[track_id]) > 30:
                 track_history[track_id].pop(0)
@@ -164,6 +168,10 @@ def main():
                     if check_intersection(prev_pt, curr_pt, line2_pt1, line2_pt2):
                         entry_time = active_vehicles.pop(track_id)
                         counted_ids.add(track_id)
+                        
+                        # Immediately remove tracking history and trails upon crossing exit line
+                        track_history.pop(track_id, None)
+                        track_last_seen.pop(track_id, None)
                         
                         if label in counts:
                             counts[label] += 1
@@ -186,18 +194,24 @@ def main():
                         
                         color_line2 = (0, 255, 0) # Flash Green
             
-            # Visibility logic: STRICTLY ignore vehicles before Entry line
-            if track_id in active_vehicles or track_id in counted_ids:
-                # Highlight active vehicles in green in the monitoring zone
+            # Draw premium blue tracking trail (BGR format) for non-exited vehicles
+            if track_id not in counted_ids:
                 bbox_color = (0, 255, 0) if track_id in active_vehicles else None
-                
                 draw_bbox(frame, box, label, conf, track_id=track_id, color=bbox_color)
                 
-                pts = track_history[track_id]
-                # To make it even cleaner, we can optionally only draw the trail from the entry point
-                # But for now, just drawing the history is fine as it shows the path
-                for i in range(1, len(pts)):
-                    cv2.line(frame, pts[i-1], pts[i], (255, 255, 0), 2)
+                if track_id in track_history:
+                    pts = track_history[track_id]
+                    for i in range(1, len(pts)):
+                        cv2.line(frame, pts[i-1], pts[i], (255, 0, 0), 2)
+                        
+        # Purge inactive vehicle IDs from memory to prevent memory buildup
+        # If not detected for 30 consecutive frames, safely remove
+        inactive_threshold = 30
+        for tid in list(track_history.keys()):
+            if frame_idx - track_last_seen.get(tid, 0) > inactive_threshold:
+                track_history.pop(tid, None)
+                active_vehicles.pop(tid, None)
+                track_last_seen.pop(tid, None)
                 
         # Draw lines
         cv2.line(frame, line1_pt1, line1_pt2, color_line1, 3)
