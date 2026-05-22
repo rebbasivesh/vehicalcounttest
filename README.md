@@ -2,9 +2,7 @@
 
 A professional, production-grade computer vision dashboard designed to monitor traffic flows, detect and track vehicles, and generate detailed CSV audit reports using **YOLOv8** and **Streamlit**.
 
-This suite offers two operating modes:
-1. **Interactive Streamlit Web Dashboard** (`app.py`): A modern, minimalist glassmorphic dark-mode web application featuring real-time detection streams, interactive sliders for calibrating dual crossing lines, dynamic Plotly visual analytics, and CSV report exports.
-2. **Local OpenCV Pipeline** (`main.py`): An efficient command-line utility with mouse-drawn trigger zones.
+This application is fully optimized for local run and **Streamlit Community Cloud** hosting out-of-the-box.
 
 ---
 
@@ -32,6 +30,32 @@ This suite offers two operating modes:
 
 ---
 
+## 🛠️ Critical Debugging & Stability Fixes
+
+To resolve previous issues involving silent crashes, unexpected reloads, and freezing, we implemented the following technical fixes:
+
+1. **YOLO Resource Caching (`@st.cache_resource`)**:
+   - *Problem*: Previously, the heavy YOLO model (52MB+) was being loaded from scratch inside the frame loop or on every rerun, causing instant Out-of-Memory (OOM) memory leaks and silent Streamlit crashes.
+   - *Fix*: Wrapped the `VehicleDetector` loading inside a `@st.cache_resource` block. The model is loaded **exactly once** and shared across all runs, reducing setup latency and completely stopping memory leaks.
+
+2. **Control Lock Mechanism (`disabled=disabled_during_run`)**:
+   - *Problem*: Interacting with sidebar sliders while a video was actively processing caused Streamlit to immediately trigger an abrupt script rerun, aborting the active thread and leaving temporary files locked.
+   - *Fix*: We now lock (disable) all sidebar configuration widgets during video inference. Sliders are reactive for calibration when idle, but safely locked when processing is active.
+
+3. **Collision-Free File Naming (`uuid.uuid4()`)**:
+   - *Problem*: Reusing static filenames for outputs caused Windows file lock violations (`PermissionError`) if a previous run was aborted mid-stream.
+   - *Fix*: Dynamically compile outputs using random UUID names (e.g. `processed_a3d2e1b4.mp4`). This ensures **zero** file collisions or lock errors.
+
+4. **Resource Management (`try...finally`)**:
+   - *Problem*: Memory leaks from unreleased OpenCV capture/writer bindings.
+   - *Fix*: Wrapped the frame loop in a robust `try...finally` block. This guarantees that `cap.release()` and `out.release()` execute, freeing memory and CPU channels even if the stream crashes or the user hits force stop.
+
+5. **Static Grid Visual Stability**:
+   - *Problem*: Empty UI elements causing cards to jitter, jump, or move down the page during loops.
+   - *Fix*: Established permanent layouts using grid placeholders (`st.empty()`) in `app.py`. Cards stay structurally locked in their columns and update content dynamically.
+
+---
+
 ## 📁 Repository Structure
 
 ```text
@@ -40,9 +64,9 @@ This suite offers two operating modes:
 ├── .gitignore               # Ensures lightweight repository (excl. large videos/pt models)
 ├── README.md                # Detailed user manual (this file)
 ├── requirements.txt         # Package dependencies (optimized for headless servers)
-├── app.py                   # Main Streamlit Web Application Dashboard [NEW]
+├── app.py                   # Main Streamlit Web Application Dashboard [NEW/FIXED]
 ├── main.py                  # CLI implementation with OpenCV mouse clicks
-├── vehicle_detector.py      # Core wrapper class for the YOLOv8 tracking library
+├── vehicle_detector.py      # Core wrapper class for the YOLOv8 tracking library [UPGRADED]
 ├── utils.py                 # Core graphic functions (bounding box drawing, overlay panel)
 ├── classes.txt              # Standard target YOLO COCO class lists
 └── config.yaml              # Custom model definitions and YAML dataset bounds
@@ -54,7 +78,7 @@ This suite offers two operating modes:
 
 Ensure you have **Python 3.8+** installed on your system.
 
-### 1. Clone or Locate Project Folder
+### 1. Navigate to Project Folder
 Open your terminal/command prompt and navigate to the project directory:
 ```bash
 cd S:\DATS\Trail\vehicle_detection_project
@@ -74,7 +98,7 @@ source venv/bin/activate
 ```
 
 ### 3. Install Package Dependencies
-Install the required packages. Note that `requirements.txt` relies on `opencv-python-headless` for server compatibility. For local GUI windows (needed by `main.py` but not `app.py`), you can use either headless or standard OpenCV.
+Install the required packages:
 ```bash
 pip install -r requirements.txt
 ```
@@ -116,31 +140,12 @@ Use the following commands to upload the files under your project folder to your
 > Ensure you run this inside the `vehicle_detection_project` directory so that large raw video recordings (`.mp4`, `.zip`) and heavy YOLO model checkpoints (`.pt`) are automatically filtered out by our configured `.gitignore`.
 
 ```bash
-# 1. Initialize empty Git repository
-git init
-
-# 2. Add remote origin repository link
-git remote add origin https://github.com/rebbasivesh/vehicalcounttest.git
-
-# 3. Rename default branch to main
-git branch -M main
-
-# 4. Stage all project files (except ignored ones)
+# 1. Stage all project files (except ignored ones)
 git add .
 
-# 5. Commit files to history
-git commit -m "feat: implement premium Streamlit dashboard with interactive calibration, dynamic analytics, and headless cloud support"
+# 2. Commit files to history
+git commit -m "fix: implement major Streamlit stability fixes including YOLO caching, UUID file outputs, locked widgets, and robust resource cleanups"
 
-# 6. Push code to GitHub
+# 3. Push code to GitHub
 git push -u origin main
 ```
-
----
-
-## 🛠️ Calibration & Parameters Quick-Guide
-
-1. **Model Selection**: Standard pre-trained models will download automatically from Ultralytics servers on the first run.
-2. **Sliders**:
-   - Move **Entry Line** (Yellow) and **Exit Line** (Magenta) using the sidebar sliders. Align them such that incoming traffic crosses the Yellow line first (enters zone), and then the Magenta line (is counted/classified).
-   - Use **Confidence Threshold** to filter out low-confidence background noise (default `0.15` works best for average angles).
-   - Increase **Frame Skipping** (e.g. to `2` or `3`) if you are deploying to Streamlit Cloud or have standard CPU setups; this maintains vehicle tracking while bypassing alternate frames, accelerating processing up to 300%.
