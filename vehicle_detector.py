@@ -49,10 +49,11 @@ class VehicleDetector:
         else:
             return "Others"
 
-    def detect_and_track(self, frame, conf=0.15, iou=0.5):
+    def detect_and_track(self, frame, conf=0.15, iou=0.5, imgsz=320):
         """
         Detects and tracks vehicles in the given frame using built-in tracker.
         Accepts dynamic confidence and IOU thresholds from the UI sliders.
+        Supports dynamic imgsz parameter for inference optimization.
         Returns a list of parsed detections with tracking IDs.
         """
         # Run tracking using botsort.yaml tracker with dynamic settings
@@ -63,7 +64,8 @@ class VehicleDetector:
             verbose=False, 
             tracker="botsort.yaml", 
             conf=conf,
-            iou=iou
+            iou=iou,
+            imgsz=imgsz
         )
         
         detections = []

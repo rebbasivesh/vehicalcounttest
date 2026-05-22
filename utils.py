@@ -1,12 +1,14 @@
 import cv2
 import numpy as np
 
-# A color palette for different vehicle types
+# A gorgeous premium color palette for different vehicle types (BGR format)
 CLASS_COLORS = {
-    "2 Wheeler": (0, 165, 255),    # Orange
     "Car": (255, 255, 0),          # Cyan
+    "Bike": (0, 165, 255),         # Orange
     "Bus": (0, 255, 0),            # Green
-    "Truck/SCV/LCV": (255, 0, 255),# Magenta
+    "Truck": (255, 0, 255),        # Magenta
+    "Auto": (0, 255, 255),         # Yellow
+    "Others": (128, 128, 128),     # Gray
     "Unknown": (128, 128, 128)     # Gray
 }
 
@@ -51,48 +53,48 @@ def draw_dashboard(frame, counts, total_count, active_count):
     """
     h, w = frame.shape[:2]
     
-    # Dashboard dimensions
-    dash_w = 250
-    dash_h = 280  # Increased height
-    margin = 20
+    # Dashboard dimensions optimized for 640x360 and higher resolutions
+    dash_w = 180
+    dash_h = 220
+    margin = 15
     x_offset = w - dash_w - margin
     y_offset = margin
     
     # Create an overlay for transparency
     overlay = frame.copy()
     
-    # Draw panel background (Dark grey with 60% opacity)
+    # Draw panel background (Dark grey with 75% opacity)
     cv2.rectangle(overlay, (x_offset, y_offset), (x_offset + dash_w, y_offset + dash_h), (20, 20, 20), -1)
     # Draw panel border
-    cv2.rectangle(overlay, (x_offset, y_offset), (x_offset + dash_w, y_offset + dash_h), (0, 255, 255), 2)
+    cv2.rectangle(overlay, (x_offset, y_offset), (x_offset + dash_w, y_offset + dash_h), (102, 255, 0), 2) # Neon Green border (BGR: 0, 255, 102 -> (102, 255, 0))
     
     # Blend overlay with original frame
-    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+    cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
     
     # Draw Header
-    cv2.putText(frame, "TRAFFIC STATS", (x_offset + 30, y_offset + 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.line(frame, (x_offset + 10, y_offset + 40), (x_offset + dash_w - 10, y_offset + 40), (0, 255, 255), 1)
+    cv2.putText(frame, "TRAFFIC STATS", (x_offset + 25, y_offset + 22), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (102, 255, 0), 2)
+    cv2.line(frame, (x_offset + 10, y_offset + 30), (x_offset + dash_w - 10, y_offset + 30), (102, 255, 0), 1)
     
     # Draw Counts
-    y_text = y_offset + 70
-    line_spacing = 30
+    y_text = y_offset + 50
+    line_spacing = 22
     
     # Active Tracking IDs
-    cv2.putText(frame, f"Active IDs: {active_count}", (x_offset + 20, y_text), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.putText(frame, f"Active IDs: {active_count}", (x_offset + 15, y_text), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
     y_text += line_spacing
     
     # Total Count in bold/larger font
-    cv2.putText(frame, f"TOTAL: {total_count}", (x_offset + 20, y_text), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    y_text += line_spacing + 10
+    cv2.putText(frame, f"TOTAL: {total_count}", (x_offset + 15, y_text), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    y_text += line_spacing + 5
     
     # Individual Counts
     for category, count in counts.items():
         color = CLASS_COLORS.get(category, (255, 255, 255))
-        cv2.putText(frame, f"{category}: {count}", (x_offset + 20, y_text), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+        cv2.putText(frame, f"{category}: {count}", (x_offset + 15, y_text), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
         y_text += line_spacing
 
 def ccw(A, B, C):

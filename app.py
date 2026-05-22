@@ -261,18 +261,26 @@ st.sidebar.markdown("### 🎚️ Tracker Thresholds")
 conf_threshold = st.sidebar.slider("Confidence Threshold", 0.05, 1.00, 0.15, 0.05, disabled=disabled_during_run)
 iou_threshold = st.sidebar.slider("IOU Tracker Threshold", 0.10, 0.95, 0.50, 0.05, disabled=disabled_during_run)
 
-st.sidebar.markdown("### 📏 Crossing Gates Y-Coords")
-entry_line_y = st.sidebar.slider("Entry Gate (Yellow)", 50, 550, 300, 10, disabled=disabled_during_run)
-exit_line_y = st.sidebar.slider("Exit Gate (Magenta)", 50, 550, 450, 10, disabled=disabled_during_run)
+st.sidebar.markdown("### 📏 Crossing Gates Y-Coords (640x360 scale)")
+entry_line_y = st.sidebar.slider("Entry Gate (Yellow)", 10, 350, 150, 5, disabled=disabled_during_run)
+exit_line_y = st.sidebar.slider("Exit Gate (Magenta)", 10, 350, 250, 5, disabled=disabled_during_run)
 
 st.sidebar.markdown("### ⚡ Inference Optimization")
 frame_skipping = st.sidebar.slider(
     "Frame Skipping Factor",
     min_value=1,
     max_value=5,
-    value=1,
+    value=3,
     disabled=disabled_during_run,
     help="1 = process all frames. 2 = process alternate frames, etc. Drastically speeds up Streamlit Cloud."
+)
+
+imgsz_selection = st.sidebar.selectbox(
+    "YOLO Inference Size (imgsz)",
+    options=[160, 224, 320, 416, 512, 640],
+    index=2, # default to 320
+    disabled=disabled_during_run,
+    help="Smaller size drops computations by 75%+, drastically boosting speed on CPU environments."
 )
 
 # Start/Stop Button with Callback
@@ -332,72 +340,65 @@ if st.session_state.temp_raw_video_path and os.path.exists(st.session_state.temp
 else:
     st.info("💡 Awaiting video upload. Upload a file above, set your boundaries, and click 'Start Detection'.")
 
-# ----------------- MIDDLE SECTION: LIVE STREAM & METRIC CARDS -----------------
+# ----------------- MIDDLE SECTION: CALIBRATION OR BACKGROUND LOADING -----------------
 st.markdown("---")
 
-col_left, col_right = st.columns([7, 3])
-
-with col_left:
-    st.markdown("### 🎬 Visual Processing Stream")
-    # Live frame container
-    video_placeholder = st.empty()
-    
-    # Render static line preview when not active
-    if not st.session_state.is_processing and st.session_state.temp_raw_video_path:
+if not st.session_state.is_processing and not st.session_state.process_complete:
+    if st.session_state.temp_raw_video_path and os.path.exists(st.session_state.temp_raw_video_path):
+        st.markdown("### 📏 Step 2: Calibration & Preview Zone")
         cap = cv2.VideoCapture(st.session_state.temp_raw_video_path)
         ret, first_frame = cap.read()
         cap.release()
         
         if ret:
-            frame_resized = cv2.resize(first_frame, (1020, 600))
+            frame_resized = cv2.resize(first_frame, (640, 360))
             # Overlay entry/exit lines on static preview
-            cv2.line(frame_resized, (0, entry_line_y), (1020, entry_line_y), (0, 255, 255), 3) # Yellow
-            cv2.line(frame_resized, (0, exit_line_y), (1020, exit_line_y), (255, 0, 255), 3) # Magenta
+            cv2.line(frame_resized, (0, entry_line_y), (640, entry_line_y), (0, 255, 255), 2) # Yellow
+            cv2.line(frame_resized, (0, exit_line_y), (640, exit_line_y), (255, 0, 255), 2) # Magenta
             cv2.putText(frame_resized, f"ENTRY ZONE (Y={entry_line_y})", (20, entry_line_y - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
             cv2.putText(frame_resized, f"EXIT ZONE (Y={exit_line_y})", (20, exit_line_y - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
             
-            video_placeholder.image(frame_resized, channels="BGR", use_container_width=True)
-            st.caption("📏 **Calibration Preview**: Line 1 (Yellow) represents Entry boundary, Line 2 (Magenta) represents Exit boundary.")
+            col_pre_l, col_pre_r = st.columns([7, 3])
+            with col_pre_l:
+                st.image(frame_resized, channels="BGR", use_container_width=True)
+                st.caption("📏 **Calibration Preview**: Yellow Line = Entry Gate, Magenta Line = Exit Gate. Adjust sliders in sidebar.")
+            with col_pre_r:
+                st.markdown("""
+                <div style="background: rgba(30, 36, 50, 0.3); padding: 20px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.05);">
+                    <h4 style="margin-top:0; color: #00FF66;">💡 Calibration Guidelines</h4>
+                    <p style="font-size: 0.9rem; color: #A0AEC0;">
+                        Use the <b>Crossing Gates Y-Coords</b> sliders in the sidebar to adjust boundaries:
+                    </p>
+                    <ul style="font-size: 0.85rem; color: #A0AEC0; padding-left: 20px;">
+                        <li><b>Yellow Line</b>: Entry boundary where vehicle tracking registers.</li>
+                        <li><b>Magenta Line</b>: Exit boundary. Once a vehicle crosses this boundary, transit duration is logged and counts increment.</li>
+                        <li>Set <b>Frame Skipping</b> and <b>YOLO Inference Size</b> to optimize performance.</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
         else:
-            video_placeholder.error("Could not read frame from video. File might be corrupted.")
+            st.error("Could not read frame from video. File might be corrupted.")
+    else:
+        st.info("💡 Awaiting video upload. Upload a file above, set your boundaries, and click 'Start Detection'.")
 
-with col_right:
-    st.markdown("### 📊 Live Analytics & Statistics")
+elif st.session_state.is_processing:
+    st.markdown("### ⚙️ Video Processing in Progress...")
     
-    # Static Grid creation of real-time card components
-    r1c1, r1c2 = st.columns(2)
-    total_card = r1c1.empty()
-    fps_card = r1c2.empty()
-    
-    r2c1, r2c2 = st.columns(2)
-    cars_card = r2c1.empty()
-    bikes_card = r2c2.empty()
-    
-    r3c1, r3c2 = st.columns(2)
-    trucks_card = r3c1.empty()
-    buses_card = r3c2.empty()
-    
-    r4c1, r4c2 = st.columns(2)
-    pct_card = r4c1.empty()
-    autos_card = r4c2.empty()
-    
-    # Set default values for visual stability
-    def update_cards(total=0, fps=0.0, cars=0, bikes=0, trucks=0, buses=0, autos=0, pct=0.0):
-        total_card.markdown(f'<div class="metric-card"><div class="metric-value">{total}</div><div class="metric-label">Total Counted</div></div>', unsafe_allow_html=True)
-        fps_card.markdown(f'<div class="metric-card"><div class="metric-value">{fps:.1f}</div><div class="metric-label">Processing FPS</div></div>', unsafe_allow_html=True)
-        cars_card.markdown(f'<div class="metric-card"><div class="metric-value">{cars}</div><div class="metric-label">🚗 Cars</div></div>', unsafe_allow_html=True)
-        bikes_card.markdown(f'<div class="metric-card"><div class="metric-value">{bikes}</div><div class="metric-label">🏍️ Bikes</div></div>', unsafe_allow_html=True)
-        trucks_card.markdown(f'<div class="metric-card"><div class="metric-value">{trucks}</div><div class="metric-label">🚛 Trucks</div></div>', unsafe_allow_html=True)
-        buses_card.markdown(f'<div class="metric-card"><div class="metric-value">{buses}</div><div class="metric-label">🚌 Buses</div></div>', unsafe_allow_html=True)
-        pct_card.markdown(f'<div class="metric-card"><div class="metric-value">{pct:.1f}%</div><div class="metric-label">Progress</div></div>', unsafe_allow_html=True)
-        autos_card.markdown(f'<div class="metric-card"><div class="metric-value">{autos}</div><div class="metric-label">🛺 Autos</div></div>', unsafe_allow_html=True)
+    # Elegant, minimal background progress panel
+    progress_container = st.container()
+    with progress_container:
+        st.spinner("YOLOv8 offline tracker is running at high speed...")
+        
+        col_prog_l, col_prog_r = st.columns([8, 2])
+        with col_prog_l:
+            progress_bar = st.progress(0.0)
+            timer_text = st.empty()
+        with col_prog_r:
+            status_text = st.empty()
 
-    # Initialize cards with default zeros
-    update_cards()
-
-# ----------------- MAIN VIDEO PROCESSING LOOP -----------------
+# ----------------- MAIN VIDEO PROCESSING LOOP (OFFLINE) -----------------
 if st.session_state.is_processing and st.session_state.temp_raw_video_path:
     # 1. Cache load detector safely
     try:
@@ -412,8 +413,14 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
     temp_out_path = os.path.join(tempfile.gettempdir(), f"processed_{unique_id}.mp4")
     
     cap = cv2.VideoCapture(st.session_state.temp_raw_video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps_video = cap.get(cv2.CAP_PROP_FPS)
+    if fps_video <= 0:
+        fps_video = 30.0
+        
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(temp_out_path, fourcc, fps_video, (1020, 600))
+    # Physically resize target video frames to 640x360 for high efficiency
+    out = cv2.VideoWriter(temp_out_path, fourcc, fps_video / frame_skipping, (640, 360))
     
     # 3. Running loop states
     track_history = {}
@@ -431,19 +438,15 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
         "Others": 0
     }
     
-    # Line endpoints
-    line1_pt1, line1_pt2 = (0, entry_line_y), (1020, entry_line_y)
-    line2_pt1, line2_pt2 = (0, exit_line_y), (1020, exit_line_y)
+    # Line endpoints scaled to 640x360
+    line1_pt1, line1_pt2 = (0, entry_line_y), (640, entry_line_y)
+    line2_pt1, line2_pt2 = (0, exit_line_y), (640, exit_line_y)
     
     frame_idx = 0
     start_time = time.time()
     prev_time = start_time
     
-    # Layout bar below middle section
-    progress_bar = st.progress(0.0)
-    status_text = st.empty()
-    
-    print(f"[DEBUG] Started detection on video. Output path: {temp_out_path}", file=sys.stderr)
+    print(f"[DEBUG] Started offline detection. Resizing to 640x360, imgsz={imgsz_selection}. Output: {temp_out_path}", file=sys.stderr)
     
     try:
         while cap.isOpened():
@@ -462,10 +465,11 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
             if frame_idx % frame_skipping != 0:
                 continue
                 
-            frame_resized = cv2.resize(frame, (1020, 600))
+            # Physically resize frame down to 640x360 to optimize processing overhead
+            frame_resized = cv2.resize(frame, (640, 360))
             
-            # Run yolo track with user thresholds
-            detections = detector.detect_and_track(frame_resized, conf=conf_threshold, iou=iou_threshold)
+            # Run YOLO track with user thresholds and optimized imgsz
+            detections = detector.detect_and_track(frame_resized, conf=conf_threshold, iou=iou_threshold, imgsz=imgsz_selection)
             
             color_line1 = (0, 255, 255) # Yellow
             color_line2 = (255, 0, 255) # Magenta
@@ -560,42 +564,34 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
                     draw_bbox(frame_resized, box, label, conf, track_id=track_id, color=bbox_color)
                         
             # Boundaries overlays
-            cv2.line(frame_resized, line1_pt1, line1_pt2, color_line1, 3)
-            cv2.line(frame_resized, line2_pt1, line2_pt2, color_line2, 3)
+            cv2.line(frame_resized, line1_pt1, line1_pt2, color_line1, 2)
+            cv2.line(frame_resized, line2_pt1, line2_pt2, color_line2, 2)
             cv2.putText(frame_resized, "ENTRY GATE", (10, entry_line_y - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_line1, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_line1, 1)
             cv2.putText(frame_resized, "EXIT GATE", (10, exit_line_y - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_line2, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_line2, 1)
             
-            # FPS Calculation
+            # FPS Calculation (average/current frame rate on visual output)
             curr_time_fps = time.time()
             fps = 1.0 / (curr_time_fps - prev_time) if (curr_time_fps - prev_time) > 0 else 0.0
             prev_time = curr_time_fps
             draw_fps(frame_resized, fps)
             
-            # Write annotated frame
+            # Draw beautiful telemetry dashboard directly on the frame!
+            draw_dashboard(frame_resized, local_counts, len(counted_ids), len(active_vehicles))
+            
+            # Write annotated frame to video file
             out.write(frame_resized)
             
-            # Render video image immediately in empty video container
-            video_placeholder.image(frame_resized, channels="BGR", use_container_width=True)
-            
-            # Real-time metrics percentages
-            pct = min(frame_idx / total_frames, 1.0)
-            progress_bar.progress(pct)
-            status_text.text(f"🚀 Live Processing Frame {frame_idx}/{total_frames} ({int(pct*100)}%)")
-            
-            # Instantly update metrics cards on the dashboard panel
-            update_cards(
-                total=len(counted_ids),
-                fps=fps,
-                cars=local_counts["Car"],
-                bikes=local_counts["Bike"],
-                trucks=local_counts["Truck"],
-                buses=local_counts["Bus"],
-                autos=local_counts["Auto"],
-                pct=pct * 100
-            )
-            
+            # Sparse updates to Streamlit socket interface (drastically boosts processing speed)
+            if frame_idx % 15 == 0 or frame_idx == total_frames:
+                pct = min(frame_idx / total_frames, 1.0)
+                progress_bar.progress(pct)
+                elapsed = time.time() - start_time
+                avg_fps = frame_idx / elapsed if elapsed > 0 else 0.0
+                status_text.markdown(f"**Progress**: {int(pct*100)}%")
+                timer_text.markdown(f"⏱️ **Elapsed**: {elapsed:.1f}s | ⚡ **Average Speed**: {avg_fps:.1f} FPS | **Frame**: {frame_idx}/{total_frames}")
+                
     except Exception as run_err:
         print(f"[ERROR] Exception during tracking execution: {run_err}", file=sys.stderr)
         st.error(f"⚠️ Silent crash prevented! Error: {run_err}")
@@ -617,21 +613,70 @@ if st.session_state.is_processing and st.session_state.temp_raw_video_path:
 
 # ----------------- BOTTOM SECTION: TABS FOR RESULTS & DOWNLOADS -----------------
 # This bottom section stays hidden until the first video is successfully fully processed
-if st.session_state.process_complete and len(st.session_state.final_counts) > 0:
-    
+if st.session_state.process_complete and not st.session_state.is_processing and len(st.session_state.final_counts) > 0:
     st.markdown("---")
-    st.markdown("### 📥 Step 3: Analysis Reports & Data Exports")
-    
-    tab_logs, tab_charts, tab_csv, tab_downloads = st.tabs([
-        "📜 Crossing Audit Logs", 
-        "📈 Visual Plotly Analytics", 
-        "📋 CSV Spreadsheet Preview", 
-        "📥 File Export Center"
-    ])
+    st.markdown("### 🏆 Step 3: Traffic Analysis & Deep Analytics Suite")
     
     logs = st.session_state.report_data
     counts = st.session_state.final_counts
     total_audited = sum(counts.values())
+    
+    # 7 premium glassmorphic statistics cards
+    c_tot, c_car, c_bike, c_bus, c_truck, c_auto, c_oth = st.columns(7)
+    c_tot.markdown(f'<div class="metric-card"><div class="metric-value">{total_audited}</div><div class="metric-label">TOTAL COUNT</div></div>', unsafe_allow_html=True)
+    c_car.markdown(f'<div class="metric-card"><div class="metric-value">{counts.get("Car", 0)}</div><div class="metric-label">🚗 Cars</div></div>', unsafe_allow_html=True)
+    c_bike.markdown(f'<div class="metric-card"><div class="metric-value">{counts.get("Bike", 0)}</div><div class="metric-label">🏍️ Bikes</div></div>', unsafe_allow_html=True)
+    c_bus.markdown(f'<div class="metric-card"><div class="metric-value">{counts.get("Bus", 0)}</div><div class="metric-label">🚌 Buses</div></div>', unsafe_allow_html=True)
+    c_truck.markdown(f'<div class="metric-card"><div class="metric-value">{counts.get("Truck", 0)}</div><div class="metric-label">🚛 Trucks</div></div>', unsafe_allow_html=True)
+    c_auto.markdown(f'<div class="metric-card"><div class="metric-value">{counts.get("Auto", 0)}</div><div class="metric-label">🛺 Autos</div></div>', unsafe_allow_html=True)
+    c_oth.markdown(f'<div class="metric-card"><div class="metric-value">{counts.get("Others", 0)}</div><div class="metric-label">📦 Others</div></div>', unsafe_allow_html=True)
+    
+    col_res_l, col_res_r = st.columns([6, 4])
+    with col_res_l:
+        st.markdown("#### 🎬 Play Processed Output Video")
+        if st.session_state.processed_video_path and os.path.exists(st.session_state.processed_video_path):
+            st.video(st.session_state.processed_video_path)
+            st.caption("ℹ️ Download options are available in the File Export Center tab below.")
+        else:
+            st.error("Processed video file was not found.")
+            
+    with col_res_r:
+        st.markdown("#### 📊 Interactive Flow Distribution")
+        if total_audited > 0:
+            # Plotly Pie Chart
+            pie_df = pd.DataFrame({"Category": list(counts.keys()), "Audit Count": list(counts.values())})
+            pie_df = pie_df[pie_df["Audit Count"] > 0]
+            fig_pie = px.pie(
+                pie_df, 
+                values="Audit Count", 
+                names="Category", 
+                title="Traffic Share Distribution",
+                color="Category",
+                color_discrete_map={
+                    "Car": "#2596be", "Bike": "#ffa500", "Bus": "#00ff00",
+                    "Truck": "#ff00ff", "Auto": "#f7d038", "Others": "#808080"
+                },
+                hole=0.4
+            )
+            fig_pie.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                legend=dict(font=dict(color='#ffffff')),
+                title_font=dict(color='#ffffff'),
+                margin=dict(t=30, b=10, l=10, r=10)
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Awaiting tracking timeline data to compile distribution.")
+            
+    # Tabs below the main player layout
+    st.markdown("### 📥 Reports & Data Exports")
+    tab_logs, tab_charts, tab_csv, tab_downloads = st.tabs([
+        "📜 Crossing Audit Logs", 
+        "📈 Flow Density Timeline", 
+        "📋 CSV Spreadsheet Preview", 
+        "📥 File Export Center"
+    ])
     
     # TAB 1: Crossing Logs
     with tab_logs:
@@ -641,65 +686,35 @@ if st.session_state.process_complete and len(st.session_state.final_counts) > 0:
         else:
             st.warning("⚠️ No vehicles crossed both lines during this video stream.")
             
-    # TAB 2: Visual Charts
+    # TAB 2: Flow Density Timeline
     with tab_charts:
-        st.markdown("#### Visual Flow Distribution Summary")
-        if total_audited > 0:
-            c1, c2 = st.columns(2)
+        st.markdown("#### Flow Density Timeline")
+        if len(logs) > 0:
+            flow_df = pd.DataFrame(logs)
+            flow_df["Secs"] = flow_df["Exit Time"].apply(lambda x: sum(int(t) * 60**i for i, t in enumerate(reversed(x.split(':')))))
+            flow_df["Interval"] = (flow_df["Secs"] // 5) * 5
+            grouped_flow = flow_df.groupby("Interval").size().reset_index(name="Count")
             
-            with c1:
-                # Plotly Pie Chart
-                pie_df = pd.DataFrame({"Category": list(counts.keys()), "Audit Count": list(counts.values())})
-                pie_df = pie_df[pie_df["Audit Count"] > 0]
-                fig_pie = px.pie(
-                    pie_df, 
-                    values="Audit Count", 
-                    names="Category", 
-                    title="Traffic Share Distribution",
-                    color="Category",
-                    color_discrete_map={
-                        "Car": "#2596be", "Bike": "#ffa500", "Bus": "#00ff00",
-                        "Truck": "#ff00ff", "Auto": "#f7d038", "Others": "#808080"
-                    },
-                    hole=0.4
-                )
-                fig_pie.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    legend=dict(font=dict(color='#ffffff')),
-                    title_font=dict(color='#ffffff')
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
-                
-            with c2:
-                # Plotly Flow Time Line chart
-                if len(logs) > 0:
-                    flow_df = pd.DataFrame(logs)
-                    flow_df["Secs"] = flow_df["Exit Time"].apply(lambda x: sum(int(t) * 60**i for i, t in enumerate(reversed(x.split(':')))))
-                    flow_df["Interval"] = (flow_df["Secs"] // 5) * 5
-                    grouped_flow = flow_df.groupby("Interval").size().reset_index(name="Count")
-                    
-                    fig_line = px.line(
-                        grouped_flow, 
-                        x="Interval", 
-                        y="Count", 
-                        markers=True,
-                        title="Flow Density Rate (Vehicles per 5s)",
-                        labels={"Interval": "Transit Timeline (seconds)", "Count": "Vehicles crossing"}
-                    )
-                    fig_line.update_traces(line_color="#00FF66", marker=dict(size=6, color="#ffffff"))
-                    fig_line.update_layout(
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        xaxis=dict(gridcolor='rgba(255,255,255,0.05)', tickfont=dict(color='#888888')),
-                        yaxis=dict(gridcolor='rgba(255,255,255,0.05)', tickfont=dict(color='#888888')),
-                        title_font=dict(color='#ffffff')
-                    )
-                    st.plotly_chart(fig_line, use_container_width=True)
-                else:
-                    st.caption("Not enough dataset points to chart timelines.")
+            fig_line = px.line(
+                grouped_flow, 
+                x="Interval", 
+                y="Count", 
+                markers=True,
+                title="Flow Density Rate (Vehicles per 5s)",
+                labels={"Interval": "Transit Timeline (seconds)", "Count": "Vehicles crossing"}
+            )
+            fig_line.update_traces(line_color="#00FF66", marker=dict(size=6, color="#ffffff"))
+            fig_line.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(gridcolor='rgba(255,255,255,0.05)', tickfont=dict(color='#888888')),
+                yaxis=dict(gridcolor='rgba(255,255,255,0.05)', tickfont=dict(color='#888888')),
+                title_font=dict(color='#ffffff'),
+                margin=dict(t=30, b=10, l=10, r=10)
+            )
+            st.plotly_chart(fig_line, use_container_width=True)
         else:
-            st.info("Awaiting tracking timeline data to compile visuals.")
+            st.caption("Not enough dataset points to chart timelines.")
 
     # TAB 3: CSV Preview
     with tab_csv:
